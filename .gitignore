@@ -1,0 +1,4 @@
+*.json
+*.txt
+txtToYTLista_paralelo.py
+.env
