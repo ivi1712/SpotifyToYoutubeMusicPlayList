@@ -6,7 +6,11 @@ import googleapiclient.errors
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-CLIENT_SECRETS_FILE = "client_secret.json" # Tu archivo de credenciales descargado de Google
+CLIENT_SECRETS_FILE = "client_secret3.json" # Tu archivo de credenciales descargado de Google
+
+#MAXIMO DE ERRORES PERMITIDOS ANTES DE ABORTAR EL PROCESO
+RETRIES = 6
+RETRIES_COUNT = 0
 
 def autenticar_youtube():
     # Realiza la autenticación OAuth 2.0
@@ -31,7 +35,8 @@ def crear_playlist(youtube, nombre, descripcion):
     response = request.execute()
     return response["id"]
 
-def agregar_video_a_playlist(youtube, playlist_id, video_id, mis_videos_set):
+def agregar_video_a_playlist(youtube, playlist_id, video_id, no_agregados):
+    global RETRIES_COUNT
     try:
         request = youtube.playlistItems().insert(
             part="snippet",
@@ -48,10 +53,11 @@ def agregar_video_a_playlist(youtube, playlist_id, video_id, mis_videos_set):
         response = request.execute()
         print(f"Video {video_id} agregado correctamente.")
         #si se agrega correctamente elimina el video_id de una variable para luego imprimir en un txt los que no se podiddo añadir
-        mis_videos_set.discard(video_id)
+        no_agregados.remove(video_id)
         
     except Exception as e:
         print(f"Error agregando video {video_id}: {e}")
+        RETRIES_COUNT += 1
 
 # --- EJECUCIÓN PRINCIPAL ---
 def leer_ids_desde_txt(archivo_entrada):
@@ -76,7 +82,7 @@ def leer_ids_desde_txt(archivo_entrada):
 
     except FileNotFoundError:
         print(f"❌ Error: No se encontró el archivo '{archivo_entrada}'.")
-        return []
+        raise
 
 # EJECUCIÓN
 
@@ -92,8 +98,11 @@ if __name__ == "__main__":
             playlist_id = input("Introduce el ID de la playlist que quieres recuperar: ").strip()
         archivo_entrada = input("Introduce el nombre del archivo de entrada (por ejemplo, lista_videos.txt): ")
         mis_videos = leer_ids_desde_txt(archivo_entrada)
-        mis_videos_set = set(mis_videos)  # Para seguimiento de cuáles se agregan o no
-        nombre_sin_extension = archivo_entrada.removesuffix(".txt")
+        no_agregados = list(mis_videos) #se guarda en una lista para no perder el orden original, luego se escribe en un txt al final del proceso
+        nombre_no_agregadas = input(f"Introduce el nombre del archivo para no agregadas (deja en blanco para usar '{archivo_entrada.removesuffix('.txt')}'): ").strip()
+        if not nombre_no_agregadas:
+            nombre_no_agregadas = archivo_entrada.removesuffix(".txt")
+            nombre_no_agregadas += "_no_agregados.txt"
         #pedir el nombre de la lista que va a crear
         if opcion == '1':
             nombre_lista = input("Introduce el nombre de la playlist que se va a crear: ").strip()
@@ -108,22 +117,40 @@ if __name__ == "__main__":
                 print(f"Playlist creada con ID: {playlist_id}")
             
             # 4. Meter los videos en la lista
+            count = 0
             for vid in mis_videos:
-                agregar_video_a_playlist(yt, playlist_id, vid, mis_videos_set)
+                old_count = RETRIES_COUNT
+                agregar_video_a_playlist(yt, playlist_id, vid, no_agregados)
+                new_count = RETRIES_COUNT
+                if new_count == old_count:
+                    count += 1
+                if RETRIES_COUNT >= RETRIES:
+                    print(f"⚠️ Se han alcanzado {RETRIES_COUNT} errores. Abortando proceso.")
+                    break
+                
                 
             print("¡Proceso terminado!")
             
-        except FileNotFoundError:
-            print("Error: No se encontró el archivo 'client_secret.json'. Necesitas credenciales de Google.")
+        except FileNotFoundError as e:
+            print(f"Error: {e}. Abortando ejecución.")
+            break
         
         # Escribir en un archivo, nombre archivo orignal + restantes, los videos que no se pudieron agregar (si es que hubo alguno)
-        if mis_videos_set:
-            print("\n⚠️ No se pudieron agregar los siguientes videos (posiblemente ya estaban en la playlist o hubo otro error):")
-            with open(f"{nombre_sin_extension}_no_agregados.txt", 'w', encoding='utf-8') as f:
-                for vid in mis_videos_set:
+        if no_agregados:
+            print("\n⚠️ No se pudieron agregar los siguientes videos, posiblemente hay un error con la couta de la API de YouTube:")
+            print("\n Prueba a cambiar el client_secret por otro de tu cuenta de Google o espera un rato para que se restablezca la cuota.")
+            with open(f"{nombre_no_agregadas}", 'w', encoding='utf-8') as f:
+                for vid in no_agregados:
                     f.write(vid + "\n")
 
+        #resumen final del proceso
+        print(f"\nResumen del proceso")
+        print(f"Total videos procesados: {count}")
+        print(f"Videos agregados correctamente: {count - len(no_agregados)}")
+        print(f"Id de la playlist creada/recuperada: {playlist_id}")
 
         respuesta = input("¿Quieres procesar otro archivo? (s/n): ").strip().lower()
         if respuesta != 's':
             exit = False
+        else:
+            RETRIES_COUNT = 0 #reiniciar contador de errores para el nuevo proceso
